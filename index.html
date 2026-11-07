@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>CaPET Video Results</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d1d1f; --muted: #5f6368; --line: #e2e4e8; --card: #f6f7f9;
+  --accent: #1a5fb4; --pending: #9aa0a6;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121314; --fg: #e8eaed; --muted: #9aa0a6; --line: #2e3134; --card: #1c1d1f;
+          --accent: #8ab4f8; --pending: #6b7075; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+       font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+.sub { color: var(--muted); margin: 0 0 22px; }
+.note { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 24px; }
+.note p { margin: 0 0 6px; } .note p:last-child { margin: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+button, select { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
+                 border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover, select:hover { border-color: var(--accent); }
+.meta { color: var(--muted); margin-left: auto; font-size: 14px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cell { margin: 0; }
+.cell .label { display: flex; justify-content: space-between; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.cell .label span { font-weight: 400; color: var(--muted); }
+.cell.ours .label { color: var(--accent); }
+video, .ph { width: 100%; aspect-ratio: 832 / 480; display: block; border-radius: 6px; background: #000; }
+.ph { display: flex; align-items: center; justify-content: center; background: var(--card);
+      border: 1px dashed var(--line); color: var(--pending); font-size: 14px; }
+.row-title { grid-column: 1 / -1; font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 8px 0 -4px; }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .meta { margin-left: 0; width: 100%; } }
+@media (max-width: 460px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Camera-Controlled Video Generation</h1>
+<p class="sub">Supplementary videos for the anonymous ICLR 2027 submission
+&ldquo;Camera Positional Embedding for Test-Time Training&rdquo;.</p>
+
+<div class="note">
+<p><b>Task.</b> Given a source video of a scene, the model generates the same scene seen along a target
+camera trajectory (held-out pairs of MultiCamVideo). The target video on the right of the top row is the
+ground truth.</p>
+<p><b>Models.</b> All four models are the same autoregressive video model with LaCT TTT layers, trained with
+the same data and schedule (14k steps); they differ only in the camera embedding.
+Every method is sampled with the same seed per pair (40 Euler steps, no guidance).</p>
+<p><b>No selection.</b> All 64 held-out pairs are shown in their fixed order.
+RotErr is the per-pair rotation error (degrees) of the camera trajectory that COLMAP recovers from the
+generated video, when COLMAP registers it.</p>
+</div>
+
+<div class="controls">
+  <button id="prev" aria-label="Previous pair">&larr; Prev</button>
+  <select id="pick" aria-label="Pair"></select>
+  <button id="next" aria-label="Next pair">Next &rarr;</button>
+  <button id="play">Pause</button>
+  <button id="restart">Restart</button>
+  <span class="meta" id="meta"></span>
+</div>
+<div class="grid" id="grid"></div>
+</main>
+
+<script>
+let M, cur = 0, playing = true;
+const grid = document.getElementById("grid");
+const pick = document.getElementById("pick");
+
+function cell(label, src, extra, cls) {
+  const f = document.createElement("figure");
+  f.className = "cell" + (cls ? " " + cls : "");
+  f.innerHTML = `<div class="label">${label}<span>${extra || ""}</span></div>`;
+  if (src) {
+    const v = document.createElement("video");
+    Object.assign(v, { src, muted: true, loop: true, playsInline: true, preload: "auto" });
+    v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+    f.appendChild(v);
+  } else {
+    const d = document.createElement("div"); d.className = "ph"; d.textContent = "generation in progress";
+    f.appendChild(d);
+  }
+  return f;
+}
+
+function show(i) {
+  cur = (i + M.pairs.length) % M.pairs.length;
+  const p = M.pairs[cur], id = String(p.index).padStart(3, "0");
+  pick.value = cur;
+  document.getElementById("meta").textContent =
+    `pair ${p.index + 1} / ${M.pairs.length} · scene ${p.scene} · camera ${p.cams} · ${p.lens}`;
+  grid.innerHTML = "";
+  const t1 = document.createElement("div"); t1.className = "row-title"; t1.textContent = "Input and ground truth";
+  grid.append(t1, cell("Source video", `videos/source/${id}.mp4`),
+              cell("Target camera (GT)", `videos/target/${id}.mp4`), document.createElement("div"));
+  const t2 = document.createElement("div"); t2.className = "row-title"; t2.textContent = "Generated at the target camera";
+  grid.append(t2);
+  for (const m of M.methods) {
+    const has = m.available.includes(p.index);
+    const e = m.rot_err[String(p.index)];
+    const extra = has ? (e !== undefined ? `RotErr ${e}°` : "not registered") : "";
+    grid.append(cell(m.label, has ? `videos/${m.key}/${id}.mp4` : null, extra, m.key === "capet" ? "ours" : ""));
+  }
+  const vs = vids();
+  let ready = 0;
+  vs.forEach(v => v.addEventListener("canplay", () => {
+    if (++ready === vs.length) restart();
+  }, { once: true }));
+}
+
+function vids() { return [...grid.querySelectorAll("video")]; }
+function restart() { vids().forEach(v => { v.currentTime = 0; if (playing) v.play().catch(() => {}); }); }
+// keep the clips in step: when the first one loops, realign the rest
+setInterval(() => {
+  const vs = vids(); if (vs.length < 2 || !playing) return;
+  const t = vs[0].currentTime;
+  vs.slice(1).forEach(v => { if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t; });
+}, 500);
+
+document.getElementById("prev").onclick = () => show(cur - 1);
+document.getElementById("next").onclick = () => show(cur + 1);
+pick.onchange = () => show(+pick.value);
+document.getElementById("restart").onclick = restart;
+document.getElementById("play").onclick = e => {
+  playing = !playing; e.target.textContent = playing ? "Pause" : "Play";
+  vids().forEach(v => playing ? v.play().catch(() => {}) : v.pause());
+};
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowLeft") show(cur - 1);
+  if (e.key === "ArrowRight") show(cur + 1);
+});
+
+fetch("manifest.json").then(r => r.json()).then(m => {
+  M = m;
+  M.pairs.forEach((p, k) => {
+    const o = document.createElement("option"); o.value = k; o.textContent = `Pair ${p.index + 1}`; pick.append(o);
+  });
+  show(0);
+});
+</script>
+</body>
+</html>
